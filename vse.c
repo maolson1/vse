@@ -19,7 +19,7 @@
 "   vse -cmd <command>\n" \
 "\n" \
 "Logs:\n" \
-"   C:\\vse-cmd-log.txt - <command> output.\n" \
+"   C:\\vse-cmd-log.txt - <command> output for -svc mode.\n" \
 "   C:\\vse-svc-log.txt - logs from vse service itself.\n" \
 "\n"
 
