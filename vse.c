@@ -9,13 +9,18 @@
 // C:\vse-svc-log.txt
 // hklm\system\currentcontrolset\services\vse
 
-#define VERSION "0.0.0"
+#define VERSION "1.0.0"
 
 #define USAGE \
-"\nvse version " VERSION "\n" \
+"\nvse " VERSION "\n" \
 "\n" \
 "Usage:\n" \
-"   vse -exec <script_abspath> [-delay <seconds>]\n" \
+"   vse -svc <command> [-delay <seconds>]\n" \
+"   vse -cmd <command>\n" \
+"\n" \
+"Logs:\n" \
+"   C:\\vse-cmd-log.txt - <command> output.\n" \
+"   C:\\vse-svc-log.txt - logs from vse service itself.\n" \
 "\n"
 
 SERVICE_STATUS_HANDLE vse_svc_status_handle;
@@ -33,8 +38,15 @@ int start_svc(int argc, wchar_t** argv)
     wchar_t** argv_cooked = NULL;
     int argc_cooked = 0;
     wchar_t* argv_serial = NULL;
+    wchar_t* quoted_cmd = NULL;
 
-    // Insert "-insvc" as argv[1], and modify argv[0] to absolute path.
+    // Modify args in the following ways to pass on to SCM:
+    // -ensure first arg is an absolute path to vse.exe.
+    // -insert "-insvc" as second arg so vse.exe can tell
+    //       when it's run as a service.
+    // -restore the quotes of the command passed in so that
+    //       the syntax of the command will be identical to
+    //       a command run plainly.
 
     abspath[0] = L'\"'; // wrap in quotes in case of spaces in path.
     if (!GetModuleFileName(NULL, abspath + 1, MAX_PATH)) {
@@ -44,15 +56,32 @@ int start_svc(int argc, wchar_t** argv)
     }
     wcscat_s(abspath, MAX_PATH + 2, L"\"");
 
+    size_t quoted_cmd_len = wcslen(argv[2]) + 3;
+    quoted_cmd = malloc(quoted_cmd_len * sizeof(wchar_t));
+    if (quoted_cmd == NULL) {
+        printf("out of memory\n");
+        err = ERROR_NOT_ENOUGH_MEMORY;
+        goto exit;
+    }
+    quoted_cmd[0] = L'\"';
+    quoted_cmd[1] = L'\0';
+    wcscat_s(quoted_cmd, quoted_cmd_len, argv[2]);
+    wcscat_s(quoted_cmd, quoted_cmd_len, L"\"");
+
     argv_cooked = malloc(sizeof(wchar_t*) * (argc + 1));
     if (argv_cooked == NULL) {
         printf("out of memory\n");
         goto exit;
     }
+    // Ensure first arg is an absolute path.
     argv_cooked[0] = abspath;
+    // Insert "-insvc" arg so vse knows when it's launched
+    // as a service.
     argv_cooked[1] = L"-insvc";
-    argc_cooked = 2;
-    for (int i = 1; i < argc; i++) {
+    argv_cooked[2] = L"-svc";
+    argv_cooked[3] = quoted_cmd;
+    argc_cooked = 4;
+    for (int i = 3; i < argc; i++) {
         argv_cooked[argc_cooked++] = argv[i];
     }
 
@@ -136,6 +165,9 @@ int start_svc(int argc, wchar_t** argv)
     }
 
 exit:
+    if (quoted_cmd != NULL) {
+        free(quoted_cmd);
+    }
     if (argv_serial != NULL) {
         free(argv_serial);
     }
@@ -210,6 +242,8 @@ void WINAPI svc_ctrl(DWORD code)
 
 void WINAPI svc_main(DWORD argc, wchar_t** argv)
 {
+    wchar_t* quoted_cmd = NULL;
+
     vse_svc_status_handle =
         RegisterServiceCtrlHandlerW(VSE_SERVICE_NAME, svc_ctrl);
     vse_svc_status.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
@@ -229,7 +263,7 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
     int my_argc = 0;
     wchar_t** my_argv = CommandLineToArgvW(GetCommandLine(), &my_argc);
 
-    wchar_t* script_path = NULL;
+    wchar_t* command = NULL;
     ULONG delay_sec = 0;
 
     int ac = 1;
@@ -239,8 +273,8 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
         int argsleft = my_argc - ac;
         if (!wcscmp(*name, L"-insvc")) {
             
-        } else if (argsleft >= 1 && !wcscmp(*name, L"-exec")) {
-            script_path = *av;
+        } else if (argsleft >= 1 && !wcscmp(*name, L"-svc")) {
+            command = *av;
             av++; ac++;
         } else if (argsleft >= 1 && !wcscmp(*name, L"-delay")) {
             delay_sec = _wtoi(*av);
@@ -251,10 +285,22 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
         }
     }
 
-    if (script_path == NULL) {
-        printf("missing script path\n");
+    if (command == NULL) {
+        printf("missing command\n");
         goto exit;
     }
+
+    // Restore quotes which were stripped
+    size_t quoted_cmd_len = wcslen(command) + 3;
+    quoted_cmd = malloc(quoted_cmd_len * sizeof(wchar_t));
+    if (quoted_cmd == NULL) {
+        printf("out of memory\n");
+        goto exit;
+    }
+    quoted_cmd[0] = L'\"';
+    quoted_cmd[1] = L'\0';
+    wcscat_s(quoted_cmd, quoted_cmd_len, command);
+    wcscat_s(quoted_cmd, quoted_cmd_len, L"\"");
 
     if (delay_sec > 0) {
         printf("sleeping for %lu sec\n", delay_sec);
@@ -273,11 +319,11 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
         goto exit;
     }
 
-    wchar_t command[512];
-    wcscpy_s(command, 512, L"cmd /c ");
-    wcscat_s(command, 512, script_path);
+    wchar_t cmd_command[512];
+    wcscpy_s(cmd_command, 512, L"cmd /c ");
+    wcscat_s(cmd_command, 512, quoted_cmd);
 
-    printf("running: %ws\n", command);
+    printf("running: %ws\n", cmd_command);
     fflush(stdout);
 
     PROCESS_INFORMATION pi = {0};
@@ -287,7 +333,7 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
     si.hStdError = outfile;
     si.dwFlags |= STARTF_USESTDHANDLES;
     if (!CreateProcessW(
-            NULL, command, NULL, NULL, TRUE, 0, NULL,
+            NULL, cmd_command, NULL, NULL, TRUE, 0, NULL,
             NULL, &si, &pi)) {
         printf("CreateProcess failed with %lu\n", GetLastError());
         CloseHandle(outfile);
@@ -300,6 +346,11 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
     CloseHandle(outfile);
 
 exit:
+
+    if (quoted_cmd != NULL) {
+        free(quoted_cmd);
+    }
+
     printf("vse end\n");
     fflush(stdout);
 
@@ -310,12 +361,55 @@ exit:
     SetServiceStatus(vse_svc_status_handle, &vse_svc_status);
 }
 
+int create_detached_process(wchar_t* command)
+{
+    int err = NO_ERROR;
+    wchar_t* cmd_command = NULL;
+    PROCESS_INFORMATION pi = {0};
+    STARTUPINFO si = {0};
+    si.cb = sizeof(si);
+
+    size_t cmd_command_len = wcslen(command) + wcslen(L"cmd.exe /c ") + 3;
+    cmd_command = malloc(cmd_command_len * sizeof(wchar_t));
+    if (cmd_command == NULL) {
+        printf("out of memory\n");
+        goto exit;
+    }
+    cmd_command[0] = L'\0';
+    wcscat_s(cmd_command, cmd_command_len, L"cmd.exe /c \"");
+    wcscat_s(cmd_command, cmd_command_len, command);
+    wcscat_s(cmd_command, cmd_command_len, L"\"");
+
+    printf("orig cmd = %ws\n", command);
+    printf("creating process with: %ws\n", cmd_command);
+
+    if (!CreateProcess(
+        NULL, cmd_command, NULL, NULL, FALSE,
+        DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
+
+        err = GetLastError();
+        printf("CreateProcess failed with %d\n", err);
+        goto exit;
+    }
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+exit:
+    if (cmd_command != NULL) {
+        free(cmd_command);
+    }
+    return err;
+}
+
 int __cdecl wmain(int argc, wchar_t** argv)
 {
     int err = NO_ERROR;
     if (argc == 1) {
         printf(USAGE);
-    } else if (argc >= 3 && !wcscmp(argv[1], L"-exec")) {
+    } else if (argc == 3 && !wcscmp(argv[1], L"-cmd")) {
+        err = create_detached_process(argv[2]);
+    } else if (argc >= 3 && !wcscmp(argv[1], L"-svc")) {
         err = start_svc(argc, argv);
     } else if (argc >= 3 && !wcscmp(argv[1], L"-insvc")) {
         SERVICE_TABLE_ENTRYW svctable[] = {{L"", svc_main}, {NULL, NULL}};
