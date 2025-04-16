@@ -5,28 +5,22 @@
 #include <wchar.h>
 #include <shellapi.h>
 
-// C:\vse-cmd-log.txt
-// C:\vse-svc-log.txt
-// hklm\system\currentcontrolset\services\vse
-
-#define VERSION "1.0.0"
+#define VERSION "2.0.0"
+#define VSE_SERVICE_NAME L"vse"
 
 #define USAGE \
 "\nvse " VERSION "\n" \
 "\n" \
 "Usage:\n" \
-"   vse -svc <command> [-delay <seconds>]\n" \
-"   vse -cmd <command>\n" \
+"   vse -cmd <command> [-delay <seconds>]\n" \
 "\n" \
 "Logs:\n" \
-"   C:\\vse-cmd-log.txt - <command> output for -svc mode.\n" \
-"   C:\\vse-svc-log.txt - logs from vse service itself.\n" \
+"   C:\\vse-cmd-log.txt - <command> output.\n" \
+"   C:\\vse-svc-log.txt - vse output.\n" \
 "\n"
 
 SERVICE_STATUS_HANDLE vse_svc_status_handle;
 SERVICE_STATUS vse_svc_status;
-
-#define VSE_SERVICE_NAME L"vse"
 
 int start_svc(int argc, wchar_t** argv)
 {
@@ -78,7 +72,7 @@ int start_svc(int argc, wchar_t** argv)
     // Insert "-insvc" arg so vse knows when it's launched
     // as a service.
     argv_cooked[1] = L"-insvc";
-    argv_cooked[2] = L"-svc";
+    argv_cooked[2] = L"-cmd";
     argv_cooked[3] = quoted_cmd;
     argc_cooked = 4;
     for (int i = 3; i < argc; i++) {
@@ -272,8 +266,8 @@ void WINAPI svc_main(DWORD argc, wchar_t** argv)
         wchar_t** name = av++; ac++;
         int argsleft = my_argc - ac;
         if (!wcscmp(*name, L"-insvc")) {
-            
-        } else if (argsleft >= 1 && !wcscmp(*name, L"-svc")) {
+
+        } else if (argsleft >= 1 && !wcscmp(*name, L"-cmd")) {
             command = *av;
             av++; ac++;
         } else if (argsleft >= 1 && !wcscmp(*name, L"-delay")) {
@@ -361,55 +355,12 @@ exit:
     SetServiceStatus(vse_svc_status_handle, &vse_svc_status);
 }
 
-int create_detached_process(wchar_t* command)
-{
-    int err = NO_ERROR;
-    wchar_t* cmd_command = NULL;
-    PROCESS_INFORMATION pi = {0};
-    STARTUPINFO si = {0};
-    si.cb = sizeof(si);
-
-    size_t cmd_command_len = wcslen(command) + wcslen(L"cmd.exe /c ") + 3;
-    cmd_command = malloc(cmd_command_len * sizeof(wchar_t));
-    if (cmd_command == NULL) {
-        printf("out of memory\n");
-        goto exit;
-    }
-    cmd_command[0] = L'\0';
-    wcscat_s(cmd_command, cmd_command_len, L"cmd.exe /c \"");
-    wcscat_s(cmd_command, cmd_command_len, command);
-    wcscat_s(cmd_command, cmd_command_len, L"\"");
-
-    printf("orig cmd = %ws\n", command);
-    printf("creating process with: %ws\n", cmd_command);
-
-    if (!CreateProcess(
-        NULL, cmd_command, NULL, NULL, FALSE,
-        DETACHED_PROCESS, NULL, NULL, &si, &pi)) {
-
-        err = GetLastError();
-        printf("CreateProcess failed with %d\n", err);
-        goto exit;
-    }
-
-    CloseHandle(pi.hProcess);
-    CloseHandle(pi.hThread);
-
-exit:
-    if (cmd_command != NULL) {
-        free(cmd_command);
-    }
-    return err;
-}
-
 int __cdecl wmain(int argc, wchar_t** argv)
 {
     int err = NO_ERROR;
     if (argc == 1) {
         printf(USAGE);
-    } else if (argc == 3 && !wcscmp(argv[1], L"-cmd")) {
-        err = create_detached_process(argv[2]);
-    } else if (argc >= 3 && !wcscmp(argv[1], L"-svc")) {
+    } else if (argc >= 3 && !wcscmp(argv[1], L"-cmd")) {
         err = start_svc(argc, argv);
     } else if (argc >= 3 && !wcscmp(argv[1], L"-insvc")) {
         SERVICE_TABLE_ENTRYW svctable[] = {{L"", svc_main}, {NULL, NULL}};
