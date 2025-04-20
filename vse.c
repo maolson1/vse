@@ -80,7 +80,7 @@ int start_svc(int argc, wchar_t** argv)
     }
 
     // Also serialize the modified argv to give to CreateService.
-    // Nastily, the serialized args given to CreateService are what
+    // Nastily, the serialized args given to CreateService are
     // passed to ServiceMain when the service is started with
     // "net start" or (when set to auto start) by the SCM during
     // boot, but then if you start the service with "sc start"
